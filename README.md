@@ -4,6 +4,8 @@
 
 豆瓣没有官方数据导出功能，豆伴（Tofu）等浏览器扩展已年久失修。本工具基于豆瓣移动端 Rexxar API（逆向自豆伴源码），用 Python 脚本实现全量导出，稳定可靠。
 
+**[English](#english)** | **中文**
+
 ## 支持导出的数据
 
 | 类别 | 数据 | 状态 |
@@ -153,3 +155,162 @@ MIT
 
 - [豆伴/tofu](https://github.com/doufen-org/tofu) — API 端点和请求头策略的灵感来源
 - [豆瓣](https://www.douban.com) — 承载了无数人的精神世界
+
+---
+
+<a id="english"></a>
+
+# Douban Takeout 🥡 (English)
+
+Export all your personal data from [Douban](https://www.douban.com) — the Chinese platform for tracking movies, books, music, and games. Think Google Takeout, but for Douban.
+
+Douban has no official data export feature, and browser extensions like Tofu (豆伴) are long abandoned. This tool uses Douban's mobile Rexxar API (reverse-engineered from the Tofu source code) to reliably export everything.
+
+## What You Can Export
+
+| Category | Data | Status |
+|----------|------|--------|
+| 🎬 Movies / TV | Watched, Want to Watch, Watching + Ratings + Short Reviews | ✅ |
+| 📚 Books | Read, Want to Read, Reading + Ratings + Short Reviews | ✅ |
+| 🎮 Games | Played, Want to Play, Playing + Ratings + Short Reviews | ✅ |
+| 🎵 Music | Listened, Want to Listen, Listening + Ratings + Short Reviews | ✅ |
+| 🎭 Drama / Theater | Watched, Want to Watch, Watching + Ratings + Short Reviews | ✅ |
+| 📢 Statuses / Posts | Full timeline history | ✅ |
+| 📝 Long Reviews | Movie, book, music, and game reviews | ✅ |
+| 📓 Annotations / Notes | Reading notes, etc. | ✅ |
+
+## Output Format
+
+```
+output/
+├── raw/          # Raw JSON (complete API data with full metadata)
+├── csv/          # CSV summaries (title, rating, comment, date)
+└── markdown/     # Full-text Markdown for statuses and reviews
+```
+
+## Installation
+
+```bash
+git clone https://github.com/cytustse-cmd/douban-takeout.git
+cd douban-takeout
+
+# Install dependency (you probably already have requests)
+pip install requests
+
+# Optional: auto-extract cookies from Chrome (macOS/Windows/Linux)
+pip install browser-cookie3
+```
+
+**Requires Python 3.10+** (uses `dict | None` type union syntax)
+
+## Usage
+
+### Option 1: Auto-extract Cookies (Recommended)
+
+Make sure you're logged into Douban in Chrome, then run:
+
+```bash
+python3 douban_export.py
+```
+
+The tool will automatically extract Douban cookies from Chrome.
+
+> ⚠️ On macOS, you may be prompted for Keychain access — allow it. If auto-extraction fails, use Option 2.
+
+### Option 2: Manual Cookie
+
+1. Open `https://www.douban.com` in Chrome (make sure you're logged in)
+2. Press `F12` → **Application** → **Cookies** → `https://www.douban.com`
+3. Copy the values of `dbcl2` and `ck`
+4. Run:
+
+```bash
+python3 douban_export.py --cookie 'dbcl2="your_dbcl2_value";ck=your_ck_value'
+```
+
+### More Options
+
+```bash
+# Export only movies
+python3 douban_export.py --type movie
+
+# Export only games
+python3 douban_export.py --type game
+
+# Resume from checkpoint (after interruption)
+python3 douban_export.py --resume
+
+# Increase request interval (reduce ban risk)
+python3 douban_export.py --interval 5
+
+# Skip statuses (can be slow if you have thousands)
+python3 douban_export.py --no-statuses
+
+# Skip long reviews
+python3 douban_export.py --no-reviews
+```
+
+## Real-World Test Results
+
+Tested with a real account:
+
+| Data Type | Records | Time |
+|-----------|---------|------|
+| Movies (watched + wishlist + watching) | 4,094 | ~9 min |
+| Games (played + wishlist + playing) | 565 | ~2 min |
+| Books (read + wishlist + reading) | 262 | ~1 min |
+| Music | 18 | <1 min |
+| Statuses / Posts | 6,090 | ~35 min |
+| Long Reviews | 2 | <1 min |
+| **Total** | **11,031** | **~50 min** |
+
+Zero bans, zero data loss. API totals matched exported counts exactly.
+
+## How It Works
+
+Douban's mobile web uses the Rexxar API (`m.douban.com/rexxar/api/v2`), which returns structured JSON. This API powers Douban's own mobile site, making it far more stable than scraping desktop HTML.
+
+Key findings (reverse-engineered from [Tofu/豆伴](https://github.com/doufen-org/tofu)):
+- All requests require `ck` (CSRF token) and `for_mobile=1` parameters
+- `Referer: https://m.douban.com/mine/` and `X-Override-Referer` headers are required
+- Max 50 items per page
+- Statuses use `max_id` cursor pagination; everything else uses `start` offset pagination
+
+## Features
+
+- **Resume from checkpoint** — Progress saved after every page; use `--resume` to continue after interruption
+- **Smart rate limiting** — 3s default interval ± 1s random jitter to mimic human behavior
+- **Auto-retry** — Waits and retries on 429/403 errors, up to 3 attempts
+- **Triple output** — Raw JSON + CSV tables + Markdown full-text
+- **Minimal dependencies** — Only `requests` required; `browser-cookie3` is optional
+
+## Important Notes
+
+- This tool is intended for exporting **your own** Douban data only — do not use it to scrape others' data
+- Keep request intervals at 3 seconds or above
+- Cookies expire over time; re-extract when needed
+- If you have 5,000+ statuses, the export may take 30+ minutes — be patient
+- Use a stable network connection
+
+## FAQ
+
+**Q: "Missing `dbcl2` cookie"?**
+A: `dbcl2` only exists after login. Make sure you're logged into Douban. Note: `document.cookie` in the console **cannot** read `dbcl2` (it's HttpOnly) — you must copy it from DevTools → Application → Cookies.
+
+**Q: Getting 403 errors?**
+A: Too many requests triggered anti-scraping. Increase the interval with `--interval 10`, wait a few minutes, then `--resume`.
+
+**Q: Incomplete data?**
+A: Use `--resume` to continue from where it stopped. Check `output/progress.json` for progress details.
+
+**Q: Cookie auto-extraction fails on macOS?**
+A: Chrome's cookie database is encrypted via Keychain. `browser-cookie3` may need authorization. If it keeps failing, use `--cookie` to specify manually.
+
+## License
+
+MIT
+
+## Acknowledgements
+
+- [Tofu/豆伴](https://github.com/doufen-org/tofu) — Inspiration for API endpoints and request header strategies
+- [Douban](https://www.douban.com) — Home to countless people's cultural lives
