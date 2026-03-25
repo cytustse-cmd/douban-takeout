@@ -307,7 +307,16 @@ def export_statuses(client: DoubanClient, uid: str, progress: dict):
             log("  没有更多广播了")
             break
 
-        all_items.extend(items)
+        # 过滤空广播：只保留有实际文字内容的条目
+        MARK_ACTIVITIES = {"看过", "玩过", "读过", "听过", "想看", "想玩", "想读", "想听", "在看", "在玩", "在读", "在听"}
+        filtered = []
+        for item in items:
+            status = item.get("status", {}) or item
+            text = (status.get("text", "") or "").strip()
+            activity = (status.get("activity", "") or "").strip()
+            if text and not (activity in MARK_ACTIVITIES and len(text) < 5):
+                filtered.append(item)
+        all_items.extend(filtered)
 
         # 更新游标（最后一条的 id）
         last = items[-1]
