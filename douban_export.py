@@ -196,13 +196,19 @@ class DoubanClient:
         return self.get(url, params)
 
     def get_statuses(self, uid: str, max_id: str = "") -> dict | None:
-        """获取广播/动态"""
+        """获取广播/动态（含原创说说、转发、标记活动等全部类型）"""
         url = f"{BASE_URL}/status/user_timeline/{uid}"
-        params = {}
+        params = {"ck": self.ck, "for_mobile": "1"}
         if max_id:
             params["max_id"] = max_id
         self.session.headers["X-Override-Referer"] = "https://m.douban.com/mine/status"
         return self.get(url, params)
+
+    def get_my_statuses(self, uid: str, start: int = 0) -> dict | None:
+        """获取用户原创广播（说说），不含标记活动。
+        注意：豆瓣没有独立的原创广播端点，原创广播混在 user_timeline 中，
+        通过 activity 为空 + card.subtitle 有内容来识别。此方法保留作为备用。"""
+        return None
 
     def get_status_detail(self, status_id: str) -> dict | None:
         """获取单条广播全文"""
@@ -307,28 +313,22 @@ def export_statuses(client: DoubanClient, uid: str, progress: dict):
             log("  没有更多广播了")
             break
 
-        # 过滤空广播：只保留有实际文字内容的条目
-        MARK_ACTIVITIES = {"看过", "玩过", "读过", "听过", "想看", "想玩", "想读", "想听", "在看", "在玩", "在读", "在听"}
-        filtered = []
-        for item in items:
-            status = item.get("status", {}) or item
-            text = (status.get("text", "") or "").strip()
-            activity = (status.get("activity", "") or "").strip()
-            if text and not (activity in MARK_ACTIVITIES and len(text) < 5):
-                filtered.append(item)
-        all_items.extend(filtered)
+        # 保留所有条目（含原创广播、标记活动等）
+        # 原创广播的文字在 card.subtitle 而非 text 中
+        all_items.extend(items)
 
-        # 更新游标（最后一条的 id）
+        # 更新游标（id 在 item.status.id 中，非顶层）
         last = items[-1]
-        max_id = str(last.get("id", ""))
+        last_status = last.get("status", {}) or {}
+        max_id = str(last_status.get("id", "") or last.get("id", ""))
         progress[key] = max_id
         save_progress(progress)
 
         log(f"  已获取 {len(all_items)} 条广播，max_id={max_id}")
         save_raw(filename, all_items)
 
-        # 检查是否还有更多
-        if not data.get("has_next_page", True) or len(items) < 5:
+        # 检查是否还有更多（API 无 has_next_page 字段，用返回条数判断）
+        if len(items) < 5:
             break
 
         client._sleep()
@@ -338,6 +338,155 @@ def export_statuses(client: DoubanClient, uid: str, progress: dict):
 
     # 生成 Markdown
     _write_statuses_markdown(all_items)
+
+
+def export_my_statuses(client: DoubanClient, uid: str, progress: dict):
+    """从已抓取的 statuses 数据中筛选原创广播，下载图片，生成独立 Markdown。
+    原创广播特征：activity 为空，内容在 card.subtitle 中。"""
+    log("=" * 50)
+    log("开始处理原创广播/说说 (my_statuses)")
+
+    # 从已有的 statuses.json 读取
+    all_statuses = load_raw("statuses.json")
+    if not all_statuses:
+        log("  ⚠ 没有 statuses 数据，请先运行 export_statuses")
+        return
+
+    # 筛选原创广播 + 下载图片
+    original = []
+    for item in all_statuses:
+        status = item.get("status", {}) or item
+        activity = (status.get("activity", "") or "").strip()
+        text = _extract_status_text(status)
+        if not activity and text:
+            original.append(item)
+
+    log(f"  从 {len(all_statuses)} 条动态中筛选出 {len(original)} 条原创广播")
+
+    if original:
+        # 下载原创广播的图片
+        _download_original_images(client, original)
+        # 生成独立的原创广播 Markdown
+        _write_my_statuses_markdown(original)
+
+
+def _download_original_images(client: DoubanClient, items: list):
+    """下载原创广播中的图片"""
+    img_dir = OUTPUT_DIR / "images" / "statuses"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    failed_path = OUTPUT_DIR / "failed_images.json"
+
+    total_images = 0
+    downloaded = 0
+    skipped = 0
+    failed = []
+
+    for item in items:
+        status = item.get("status", {}) or item
+        sid = str(status.get("id", ""))
+        img_urls = _extract_status_images(status)
+
+        for idx, url in enumerate(img_urls):
+            total_images += 1
+            ext = ".jpg"
+            if ".png" in url:
+                ext = ".png"
+            elif ".gif" in url:
+                ext = ".gif"
+            elif ".webp" in url:
+                ext = ".webp"
+
+            img_path = img_dir / f"{sid}_{idx}{ext}"
+            if img_path.exists():
+                skipped += 1
+                downloaded += 1
+                continue
+
+            success = False
+            for attempt in range(1, 3):
+                try:
+                    resp = client.session.get(url, timeout=30)
+                    if resp.status_code == 200:
+                        img_path.write_bytes(resp.content)
+                        downloaded += 1
+                        success = True
+                        break
+                    elif resp.status_code in (429, 403):
+                        time.sleep(30 * attempt)
+                    else:
+                        break
+                except Exception:
+                    time.sleep(5)
+
+            if not success:
+                failed.append({"sid": sid, "idx": idx, "url": url})
+
+            time.sleep(0.5)
+
+    if failed:
+        failed_path.write_text(
+            json.dumps(failed, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        log(f"  ⚠ {len(failed)} 张图片下载失败，���记录到 {failed_path}")
+
+    log(f"  图片下载完成: {downloaded}/{total_images}（跳过已存在 {skipped}）")
+
+
+
+def _write_my_statuses_markdown(items: list):
+    """原创广播生成 Markdown（从 statuses 中筛选 activity 为空的）"""
+    if not items:
+        return
+    path = MD_DIR / "my_statuses.md"
+    lines = ["# 豆瓣原创广播/说说\n"]
+
+    # 筛选原创广播：activity 为空的条目
+    original = []
+    for item in items:
+        status = item.get("status", {}) or item
+        activity = (status.get("activity", "") or "").strip()
+        text = _extract_status_text(status)
+        if not activity and text:
+            original.append(status)
+
+    sorted_items = sorted(
+        original,
+        key=lambda x: x.get("create_time", ""),
+        reverse=True,
+    )
+
+    img_dir_rel = "../images/statuses"
+
+    for status in sorted_items:
+        sid = status.get("id", "")
+        created = status.get("create_time", "")
+        text = _extract_status_text(status)
+
+        lines.append(f"## [{created}] id={sid}")
+        lines.append("")
+        if text:
+            lines.append(text)
+            lines.append("")
+
+        # 图片引用
+        img_urls = _extract_status_images(status)
+        for idx, url in enumerate(img_urls):
+            ext = ".jpg"
+            if ".png" in url:
+                ext = ".png"
+            elif ".gif" in url:
+                ext = ".gif"
+            elif ".webp" in url:
+                ext = ".webp"
+            lines.append(f"![img]({img_dir_rel}/{sid}_{idx}{ext})")
+        if img_urls:
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+    log(f"  Markdown 已写入: {path}（{len(original)} 条原创广播）")
 
 
 def export_reviews(client: DoubanClient, uid: str, progress: dict,
@@ -446,7 +595,13 @@ def _write_interests_csv(itype: str, status: str, items: list):
     with path.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-        for item in items:
+        # 按标记时间倒序排列（最新的在前）
+        sorted_items = sorted(
+            items,
+            key=lambda x: x.get("create_time", ""),
+            reverse=True,
+        )
+        for item in sorted_items:
             subject = item.get("subject", {}) or {}
             row = {
                 "id": _safe(subject.get("id")),
@@ -459,17 +614,61 @@ def _write_interests_csv(itype: str, status: str, items: list):
             writer.writerow(row)
 
 
+def _extract_status_text(status: dict) -> str:
+    """从 status 对象提取文本内容。
+    豆瓣原创广播的文字在 card.subtitle，标记活动的短评在 text。"""
+    text = (status.get("text", "") or "").strip()
+    if not text:
+        card = status.get("card") or {}
+        text = (card.get("subtitle", "") or "").strip()
+    return text
+
+
+def _extract_status_images(status: dict) -> list[str]:
+    """从 status 对象提取图片 URL 列表（优先大图）。"""
+    urls = []
+    # 方式1：status.images
+    for img in (status.get("images") or []):
+        url = (img.get("large", {}) or {}).get("url") or \
+              (img.get("normal", {}) or {}).get("url") or \
+              img.get("url", "")
+        if url:
+            urls.append(url)
+    # 方式2：card.image（原创广播可能图片在 card 里）
+    if not urls:
+        card = status.get("card") or {}
+        card_img = card.get("image")
+        if isinstance(card_img, dict):
+            url = (card_img.get("large", {}) or {}).get("url") or \
+                  (card_img.get("normal", {}) or {}).get("url") or \
+                  card_img.get("url", "")
+            if url:
+                urls.append(url)
+        elif isinstance(card_img, str) and card_img:
+            urls.append(card_img)
+    return urls
+
+
 def _write_statuses_markdown(items: list):
     """广播/动态生成 Markdown"""
     if not items:
         return
     path = MD_DIR / "statuses.md"
     lines = ["# 豆瓣广播/动态导出\n"]
-    for item in items:
-        sid = item.get("id", "")
-        created = item.get("created_at", "")
-        text = item.get("text", "") or ""
-        activity = item.get("activity", "") or ""
+    # 按时间倒序排列
+    sorted_items = sorted(
+        items,
+        key=lambda x: (x.get("status", {}) or {}).get("create_time", ""),
+        reverse=True,
+    )
+    for item in sorted_items:
+        status = item.get("status", {}) or item
+        sid = status.get("id", "")
+        created = status.get("create_time", "")
+        text = _extract_status_text(status)
+        activity = (status.get("activity", "") or "").strip()
+        if not text:
+            continue
         lines.append(f"## [{created}] id={sid}")
         if activity:
             lines.append(f"**活动**: {activity}")
@@ -634,6 +833,10 @@ def main():
     # 广播/动态（--type 指定时也可导出，除非 --no-statuses）
     if not args.no_statuses:
         export_statuses(client, uid, progress)
+
+    # 原创广播/说说（含图片）
+    if not args.no_statuses:
+        export_my_statuses(client, uid, progress)
 
     # 长评
     if not args.no_reviews:
