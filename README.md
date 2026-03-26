@@ -7,13 +7,191 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg)](https://www.python.org)
 
-[中文](#中文) | [English](#english)
+[English](#english) | [中文](#中文)
 
 </div>
 
 ---
 
+<a id="english"></a>
+
+## What is this
+
+Douban has no official data export. Browser extensions like Tofu are abandoned.
+
+**douban-takeout** uses a dual-engine approach — Rexxar API for structured data (ratings, reviews) and HTML scraping for statuses/posts — to fully export your Douban profile: ratings, reviews, statuses, notes, and images.
+
+## Supported Data
+
+| Type | Content | Engine |
+|------|---------|--------|
+| Movies / TV / Drama | Watched, Wishlist, Watching + Ratings + Comments | API |
+| Books | Read, Wishlist, Reading + Ratings + Comments | API |
+| Games | Played, Wishlist, Playing + Ratings + Comments | API |
+| Music | Listened, Wishlist, Listening + Ratings + Comments | API |
+| Original Posts | Full timeline + image download | Web |
+| Activity Marks | Watched/Want to Watch records | Web |
+| Long Reviews | Movie, book, music, game reviews | API |
+| Notes | Reading notes, etc. | API |
+
+## Quick Start
+
+```bash
+git clone https://github.com/cytustse-cmd/douban-takeout.git
+cd douban-takeout
+pip install requests browser-cookie3  # browser-cookie3 is optional
+
+# 1. Ratings + reviews + notes
+python3 douban_export.py --no-statuses
+
+# 2. Statuses + images (web scraping bypasses API pagination limits)
+python3 export_statuses_web.py
+```
+
+> **Requirements:** Python 3.10+, logged into Douban in your browser
+
+<details>
+<summary><b>More options</b></summary>
+
+```bash
+# Manual cookie input
+python3 douban_export.py --cookie 'dbcl2="uid:xxx";ck=xxx'
+
+# Export only movies
+python3 douban_export.py --type movie
+
+# Resume from checkpoint
+python3 douban_export.py --resume
+
+# Increase request interval (default 3s)
+python3 douban_export.py --interval 5
+
+# Custom output directory
+python3 export_statuses_web.py --output ~/douban-backup
+
+# Skip image download
+python3 export_statuses_web.py --no-images
+```
+
+</details>
+
+## Output Structure
+
+```
+output/
+├── raw/                    # Raw JSON (full fields, ready for downstream use)
+├── csv/                    # CSV summaries (sorted by date, newest first)
+├── markdown/
+│   ├── my_statuses.md      # Original posts only
+│   ├── all_statuses.md     # All statuses including activity marks
+│   └── reviews_*.md        # Long reviews by category
+└── images/
+    └── statuses/           # Status images (largest available size)
+```
+
+## Architecture
+
+```
+                    ┌─────────────────────┐
+                    │   douban_export.py   │
+                    │   (Rexxar API)       │
+                    └────────┬────────────┘
+                             │
+  Cookie ──────┐             │  Ratings / Reviews / Notes
+  (Safari →    │             ▼
+   Chrome      │    ┌─────────────────────┐
+   auto-detect)├───▶│   JSON / CSV /       │──▶  output/
+               │    │   Markdown output    │
+               │    └─────────────────────┘
+               │             ▲
+               │             │  Statuses / Posts / Images
+               │    ┌────────┴────────────┐
+               └───▶│export_statuses_web.py│
+                    │   (HTML scraping)    │
+                    └─────────────────────┘
+```
+
+Two scripts, one for each engine:
+
+| | `douban_export.py` | `export_statuses_web.py` |
+|:--|:--|:--|
+| **Source** | Rexxar API (`m.douban.com`) | HTML (`www.douban.com`) |
+| **Ratings** | Yes | — |
+| **Reviews / Notes** | Yes | — |
+| **Statuses** | Limited by API pagination | Full history |
+| **Images** | — | Yes |
+
+The Rexxar API returns structured JSON but hard-limits status pagination (~10 items for some accounts). The web scraper has no such limit.
+
+**Recommended workflow:** `douban_export.py --no-statuses` then `export_statuses_web.py`
+
+## Design
+
+- **Resumable** — Progress checkpointed to `progress.json` per page/batch
+- **Rate-limited** — 3s base interval ± 1s random jitter
+- **Auto-retry** — Exponential backoff on 429/403
+- **Recoverable images** — Failed downloads logged and retried on rerun
+- **Portable output** — Markdown uses relative image paths; copy `output/` anywhere
+- **Normalized dates** — All timestamps standardized to `YYYY-MM-DD`
+- **Unified cookies** — Both scripts auto-detect Safari → Chrome
+
+## Benchmarks
+
+> From a real export of a heavy Douban user:
+
+| Data | Count | Time |
+|:-----|------:|-----:|
+| Movies | 4,094 | ~9 min |
+| Games | 565 | ~2 min |
+| Books | 262 | ~1 min |
+| Music | 18 | <1 min |
+| Statuses | 763 | ~3 min |
+| Images | 728 | ~6 min |
+| **Total** | **~5,700 + 728 imgs** | **~22 min** |
+
+## Changelog
+
+### v0.3.1 (2026-03-25)
+
+- **fix:** Use relative image paths in Markdown for portability
+- **fix:** Retry failed image downloads on rerun
+- **fix:** Normalize date formats to `YYYY-MM-DD` for stable sorting
+- **fix:** Unify cookie extraction (Safari → Chrome) across both scripts
+- **fix:** Deduplicate API status export, document Rexxar pagination limits
+
+### v0.3.0 (2026-03-25)
+
+- **feat:** Add `export_statuses_web.py` — HTML scraping engine for statuses
+- **feat:** Separate original posts into `my_statuses.md`
+- **feat:** Auto-download status images (largest size, with retry)
+- **fix:** Sort CSV by date (newest first)
+
+### v0.2.0 (2026-03-24)
+
+- **fix:** Filter empty statuses
+
+### v0.1.0 (2026-03-24)
+
+- Initial release
+
+## Acknowledgments
+
+- [Tofu (doufen-org/tofu)](https://github.com/doufen-org/tofu) — Rexxar API reverse engineering reference
+- [RSSHub](https://github.com/DIYgod/RSSHub) — Douban status route reference
+
+## License
+
+[MIT](LICENSE)
+
+---
+
 <a id="中文"></a>
+
+<div align="center">
+
+## 中文
+
+</div>
 
 ## 这是什么
 
@@ -204,164 +382,6 @@ Rexxar API 返回结构化 JSON，适合书影音标记；但对广播分页有�
 
 - [豆伴 / tofu](https://github.com/doufen-org/tofu) — Rexxar API 端点逆向参考
 - [RSSHub](https://github.com/DIYgod/RSSHub) — 豆瓣广播 route 参考
-
-## License
-
-[MIT](LICENSE)
-
----
-
-<a id="english"></a>
-
-<div align="center">
-
-## English
-
-</div>
-
-## What is this
-
-Douban has no official data export. Browser extensions like Tofu are abandoned.
-
-**douban-takeout** uses a dual-engine approach — Rexxar API for structured data (ratings, reviews) and HTML scraping for statuses/posts — to fully export your Douban profile: ratings, reviews, statuses, notes, and images.
-
-## Supported Data
-
-| Type | Content | Engine |
-|------|---------|--------|
-| Movies / TV / Drama | Watched, Wishlist, Watching + Ratings + Comments | API |
-| Books | Read, Wishlist, Reading + Ratings + Comments | API |
-| Games | Played, Wishlist, Playing + Ratings + Comments | API |
-| Music | Listened, Wishlist, Listening + Ratings + Comments | API |
-| Original Posts | Full timeline + image download | Web |
-| Activity Marks | Watched/Want to Watch records | Web |
-| Long Reviews | Movie, book, music, game reviews | API |
-| Notes | Reading notes, etc. | API |
-
-## Quick Start
-
-```bash
-git clone https://github.com/cytustse-cmd/douban-takeout.git
-cd douban-takeout
-pip install requests browser-cookie3  # browser-cookie3 is optional
-
-# 1. Ratings + reviews + notes
-python3 douban_export.py --no-statuses
-
-# 2. Statuses + images (web scraping bypasses API pagination limits)
-python3 export_statuses_web.py
-```
-
-> **Requirements:** Python 3.10+, logged into Douban in your browser
-
-<details>
-<summary><b>More options</b></summary>
-
-```bash
-# Manual cookie input
-python3 douban_export.py --cookie 'dbcl2="uid:xxx";ck=xxx'
-
-# Export only movies
-python3 douban_export.py --type movie
-
-# Resume from checkpoint
-python3 douban_export.py --resume
-
-# Increase request interval (default 3s)
-python3 douban_export.py --interval 5
-
-# Custom output directory
-python3 export_statuses_web.py --output ~/douban-backup
-
-# Skip image download
-python3 export_statuses_web.py --no-images
-```
-
-</details>
-
-## Output Structure
-
-```
-output/
-├── raw/                    # Raw JSON (full fields, ready for downstream use)
-├── csv/                    # CSV summaries (sorted by date, newest first)
-├── markdown/
-│   ├── my_statuses.md      # Original posts only
-│   ├── all_statuses.md     # All statuses including activity marks
-│   └── reviews_*.md        # Long reviews by category
-└── images/
-    └── statuses/           # Status images (largest available size)
-```
-
-## Architecture
-
-Two scripts, one for each engine:
-
-| | `douban_export.py` | `export_statuses_web.py` |
-|:--|:--|:--|
-| **Source** | Rexxar API (`m.douban.com`) | HTML (`www.douban.com`) |
-| **Ratings** | Yes | — |
-| **Reviews / Notes** | Yes | — |
-| **Statuses** | Limited by API pagination | Full history |
-| **Images** | — | Yes |
-
-The Rexxar API returns structured JSON but hard-limits status pagination (~10 items for some accounts). The web scraper has no such limit.
-
-**Recommended workflow:** `douban_export.py --no-statuses` then `export_statuses_web.py`
-
-## Design
-
-- **Resumable** — Progress checkpointed to `progress.json` per page/batch
-- **Rate-limited** — 3s base interval ± 1s random jitter
-- **Auto-retry** — Exponential backoff on 429/403
-- **Recoverable images** — Failed downloads logged and retried on rerun
-- **Portable output** — Markdown uses relative image paths; copy `output/` anywhere
-- **Normalized dates** — All timestamps standardized to `YYYY-MM-DD`
-- **Unified cookies** — Both scripts auto-detect Safari → Chrome
-
-## Benchmarks
-
-> From a real export of a heavy Douban user:
-
-| Data | Count | Time |
-|:-----|------:|-----:|
-| Movies | 4,094 | ~9 min |
-| Games | 565 | ~2 min |
-| Books | 262 | ~1 min |
-| Music | 18 | <1 min |
-| Statuses | 763 | ~3 min |
-| Images | 728 | ~6 min |
-| **Total** | **~5,700 + 728 imgs** | **~22 min** |
-
-## Changelog
-
-### v0.3.1 (2026-03-25)
-
-- **fix:** Use relative image paths in Markdown for portability
-- **fix:** Retry failed image downloads on rerun
-- **fix:** Normalize date formats to `YYYY-MM-DD` for stable sorting
-- **fix:** Unify cookie extraction (Safari → Chrome) across both scripts
-- **fix:** Deduplicate API status export, document Rexxar pagination limits
-
-### v0.3.0 (2026-03-25)
-
-- **feat:** Add `export_statuses_web.py` — HTML scraping engine for statuses
-- **feat:** Separate original posts into `my_statuses.md`
-- **feat:** Auto-download status images (largest size, with retry)
-- **fix:** Sort CSV by date (newest first)
-
-### v0.2.0 (2026-03-24)
-
-- **fix:** Filter empty statuses
-
-### v0.1.0 (2026-03-24)
-
-- Initial release
-
-## Acknowledgments
-
-- [Tofu (doufen-org/tofu)](https://github.com/doufen-org/tofu) — Rexxar API reverse engineering reference
-- [RSSHub](https://github.com/DIYgod/RSSHub) — Douban status route reference
 
 ## License
 
