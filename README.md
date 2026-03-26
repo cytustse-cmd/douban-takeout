@@ -209,6 +209,25 @@ Douban has no official data export feature. This tool uses a dual-engine approac
 | 📝 Long Reviews | Movie, book, music, game reviews | API | ✅ |
 | 📓 Notes | Reading notes, etc. | API | ✅ |
 
+## Output Structure
+
+```
+output/
+├── raw/                    # Raw JSON (full data with metadata)
+│   ├── movie_done.json
+│   ├── statuses_web.json   # All statuses (web scraping)
+│   └── ...
+├── csv/                    # CSV summaries (sorted by date, newest first)
+│   ├── movie_done.csv      # Title, rating, comment, date
+│   └── ...
+├── markdown/               # Markdown exports
+│   ├── my_statuses.md      # Original posts only
+│   ├── all_statuses.md     # All statuses (including activity marks)
+│   └── reviews_movie.md    # Long reviews
+└── images/
+    └── statuses/           # Status images (large size preferred)
+```
+
 ## Quick Start
 
 ```bash
@@ -222,6 +241,55 @@ python3 douban_export.py --no-statuses
 # Export statuses + images (web scraping)
 python3 export_statuses_web.py
 ```
+
+**Python 3.10+ required.**
+
+> **Why two scripts?** The Rexxar API has a pagination limit for statuses (only ~10 items for some accounts). The web scraper (`export_statuses_web.py`) parses HTML pages directly to bypass this limitation, exporting all statuses including original posts and images.
+
+## Two Scripts Compared
+
+| | `douban_export.py` | `export_statuses_web.py` |
+|---|---|---|
+| Data source | Rexxar API | Web HTML |
+| Ratings (movies/books/games/music) | Yes | No |
+| Reviews / Notes | Yes | No |
+| Original posts | Limited by API | Full history |
+| Activity marks | Limited by API | Full history |
+| Image download | No | Yes |
+
+**Recommended workflow**: Run `douban_export.py --no-statuses` for ratings, then `export_statuses_web.py` for statuses and images.
+
+## Features
+
+- **Resumable** — Progress saved per page; resume with `--resume`
+- **Smart rate limiting** — 3s interval with ±1s jitter
+- **Auto retry** — Retries on 429/403 with backoff
+- **Image download** — Auto-downloads status images; failures are retried on rerun
+- **Portable Markdown** — Image links use relative paths
+- **Cookie auto-detection** — Tries Safari then Chrome automatically
+- **Original posts separated** — `my_statuses.md` contains only your own posts
+- **Minimal dependencies** — Only `requests` required; `browser-cookie3` optional
+
+## Changelog
+
+### v0.3.1 (2026-03-25)
+- **Fixed** Markdown image paths now use relative paths for portability
+- **Fixed** Failed image downloads are retried on rerun (no longer permanently skipped)
+- **Fixed** Date format normalized to `YYYY-MM-DD` for stable sorting
+- **Fixed** Cookie extraction unified: Safari → Chrome auto-detection in both scripts
+- **Fixed** API status export now deduplicates and warns about Rexxar API limitations
+
+### v0.3.0 (2026-03-25)
+- **Added** `export_statuses_web.py` — web scraping for statuses, bypassing API pagination limits
+- **Added** Original posts exported separately to `my_statuses.md`
+- **Added** Auto image download (large size preferred, with retry + failure logging)
+- **Fixed** CSV files sorted by date (newest first)
+
+### v0.2.0 (2026-03-24)
+- Filter empty statuses
+
+### v0.1.0 (2026-03-24)
+- Initial release
 
 ## License
 
