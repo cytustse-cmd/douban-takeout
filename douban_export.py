@@ -196,7 +196,9 @@ class DoubanClient:
         return self.get(url, params)
 
     def get_statuses(self, uid: str, max_id: str = "") -> dict | None:
-        """获取广播/动态（含原创说说、转发、标记活动等全部类型）"""
+        """获取广播/动态（含原创说说、转发、标记活动等全部类型）
+        注意：Rexxar API 只返回最近约 10 条动态，不支持深度翻页。
+        完整导出请使用 export_statuses_web.py（网页抓取版）。"""
         url = f"{BASE_URL}/status/user_timeline/{uid}"
         params = {"ck": self.ck, "for_mobile": "1"}
         if max_id:
@@ -292,16 +294,25 @@ def export_interests(client: DoubanClient, uid: str, progress: dict,
 
 
 def export_statuses(client: DoubanClient, uid: str, progress: dict):
-    """导出广播/动态"""
+    """导出广播/动态
+    注意：Rexxar API 只返回最近约 10 条动态，无法深度翻页。
+    完整导出请使用 export_statuses_web.py（网页抓取版）。"""
     log("=" * 50)
     log("开始导出广播/动态 (statuses)")
+    log("  ⚠ Rexxar API 仅返回最近 ~10 条，完整导出请用 export_statuses_web.py")
 
     key = "statuses_max_id"
     max_id = progress.get(key, "")
     filename = "statuses.json"
 
     all_items = load_raw(filename) if max_id else []
-    log(f"  从 max_id={max_id or '最新'} 开始，已有 {len(all_items)} 条...")
+    # 用已有 ID 集合去重，防止分页重复
+    seen_ids = set()
+    for item in all_items:
+        sid = item.get("status", {}).get("id")
+        if sid:
+            seen_ids.add(sid)
+    log(f"  从 max_id={max_id or '最新'} 开始，已有 {len(all_items)} 条（去重 {len(seen_ids)} 条）...")
 
     while True:
         data = client.get_statuses(uid, max_id)
@@ -313,18 +324,33 @@ def export_statuses(client: DoubanClient, uid: str, progress: dict):
             log("  没有更多广播了")
             break
 
-        # 保留所有条目（含原创广播、标记活动等）
-        # 原创广播的文字在 card.subtitle 而非 text 中
-        all_items.extend(items)
+        # 去重：只添加未见过的条目
+        new_count = 0
+        for item in items:
+            sid = item.get("status", {}).get("id")
+            if sid and sid not in seen_ids:
+                seen_ids.add(sid)
+                all_items.append(item)
+                new_count += 1
 
-        # 更新游标（id 在 item.status.id 中，非顶层）
+        # 如果整页全是重复的，说明分页卡住了
+        if new_count == 0:
+            log("  本页全部重复，停止抓取")
+            break
+
+        # 更新游标：用最后一条的 ID 减 1，确保翻到下一页
         last = items[-1]
         last_status = last.get("status", {}) or {}
-        max_id = str(last_status.get("id", "") or last.get("id", ""))
+        last_id = last_status.get("id") or last.get("id")
+        if last_id:
+            max_id = str(int(last_id) - 1)
+        else:
+            log("  无法获取最后一条 ID，停止")
+            break
         progress[key] = max_id
         save_progress(progress)
 
-        log(f"  已获取 {len(all_items)} 条广播，max_id={max_id}")
+        log(f"  已获取 {len(all_items)} 条广播（+{new_count}），max_id={max_id}")
         save_raw(filename, all_items)
 
         # 检查是否还有更多（API 无 has_next_page 字段，用返回条数判断）
@@ -333,7 +359,7 @@ def export_statuses(client: DoubanClient, uid: str, progress: dict):
 
         client._sleep()
 
-    log(f"  广播导出完成，共 {len(all_items)} 条")
+    log(f"  广播导出完成，共 {len(all_items)} 条（去重）")
     save_raw(filename, all_items)
 
     # 生成 Markdown
