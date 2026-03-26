@@ -78,7 +78,7 @@ python3 douban_export.py --interval 5
 ### 导出广播/动态 + 图片（推荐）
 
 ```bash
-# 自动从 Safari 提取 Cookie，抓取全部广播 + 下载图片
+# 自动从浏览器提取 Cookie（Safari → Chrome），抓取全部广播 + 下载图片
 python3 export_statuses_web.py
 
 # 手动指定 Cookie
@@ -139,7 +139,7 @@ python3 export_statuses_web.py --interval 5
 - **断点续传** — 每页实时保存进度，中断后 `--resume` 继续
 - **智能限速** — 默认 3 秒间隔 ± 1 秒随机抖动
 - **自动重试** — 429/403 自动等待重试
-- **图片下载** — 广播图片自动下载，失败记录到 `failed_images.json`
+- **图片下载** — 广播图片自动下载，失败记录到 `failed_images.json`，重跑自动重试
 - **CSV 按时间排序** — 所有 CSV 按标记时间倒序排列
 - **原创广播独立输出** — `my_statuses.md` 仅包含你发的说说
 - **零依赖** — 核心只需 `requests`，`browser-cookie3` 为可选
@@ -152,6 +152,13 @@ python3 export_statuses_web.py --interval 5
 - 建议在网络稳定的环境下运行
 
 ## 迭代进程
+
+### v0.3.1 (2026-03-25)
+- **修复** Markdown 图片路径改为相对路径（`../images/statuses/`），确保可移植
+- **修复** 失败图片不再被永久跳过，重跑自动重试
+- **修复** 时间格式统一为 `YYYY-MM-DD`，解决 "3月19日" 等中文格式导致排序不稳定
+- **修复** Cookie 提取统一为 Safari → Chrome 自动检测，两个脚本行为一致
+- **修复** API 版广播导出增加去重逻辑和限制说明（Rexxar API 仅返回最近 ~10 条）
 
 ### v0.3.0 (2026-03-25)
 - **新增** `export_statuses_web.py` — 网页抓取版广播导出，绕过 API 分页限制
