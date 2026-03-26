@@ -84,26 +84,24 @@ def save_raw(output_dir: Path, filename: str, data: list):
 
 # ── Cookie 提取 ───────────────────────────────────────────────────────────────
 
-def extract_cookies_from_safari() -> dict | None:
-    """从 Safari 自动提取豆瓣 Cookie"""
+def extract_cookies_from_browser() -> dict | None:
+    """从浏览器自动提取豆瓣 Cookie（依次尝试 Safari → Chrome）"""
     if not HAS_BROWSER_COOKIE3:
         return None
-    try:
-        log("正在从 Safari 提取豆瓣 Cookie...")
-        jar = browser_cookie3.safari(domain_name=".douban.com")
-        cookies = {c.name: c.value for c in jar}
-        # ck 有时不在 Safari 中，手动补充常见默认值
-        if "ck" not in cookies:
-            cookies["ck"] = "wwpi"
-        required = {"dbcl2"}
-        if required.issubset(cookies.keys()):
-            log(f"Cookie 提取成功，找到: {', '.join(cookies.keys())}")
-            return cookies
-        log(f"Cookie 不完整，缺少: {required - cookies.keys()}")
-        return None
-    except Exception as e:
-        log(f"自动提取 Cookie 失败: {e}")
-        return None
+    for browser_name, browser_fn in [("Safari", browser_cookie3.safari), ("Chrome", browser_cookie3.chrome)]:
+        try:
+            log(f"正在从 {browser_name} 提取豆瓣 Cookie...")
+            jar = browser_fn(domain_name=".douban.com")
+            cookies = {c.name: c.value for c in jar}
+            if "ck" not in cookies:
+                cookies["ck"] = "wwpi"
+            if "dbcl2" in cookies:
+                log(f"Cookie 提取成功（{browser_name}），找到: {', '.join(cookies.keys())}")
+                return cookies
+            log(f"{browser_name} Cookie 不完整，缺少 dbcl2")
+        except Exception as e:
+            log(f"{browser_name} 提取失败: {e}")
+    return None
 
 
 def parse_cookie_string(cookie_str: str) -> dict:
@@ -284,10 +282,18 @@ def parse_single_status(chunk: str, sid: str, uid: str) -> dict | None:
         # 只取日期部分
         create_time = create_time.split(" ")[0]
     else:
-        # 没有 title 属性时，取文本内容
+        # 没有 title 属性时，取文本内容并尝试转为 YYYY-MM-DD
         time_m2 = re.search(r'<span[^>]*class="[^"]*created_at[^"]*"[^>]*>(.*?)</span>', chunk, re.DOTALL)
         if time_m2:
-            create_time = clean_text(time_m2.group(1))
+            raw_time = clean_text(time_m2.group(1))
+            # 尝试解析 "3月19日" 或 "2025-03-19" 格式
+            cn_m = re.match(r'(\d{1,2})月(\d{1,2})日', raw_time)
+            if cn_m:
+                month, day = int(cn_m.group(1)), int(cn_m.group(2))
+                year = datetime.now().year
+                create_time = f"{year}-{month:02d}-{day:02d}"
+            else:
+                create_time = raw_time
 
     # ── activity（标记活动：看过/想看/读过/玩过等）──
     # activity 文本紧跟在 <a class="lnk-people">用户名</a> 后面
@@ -421,20 +427,13 @@ def download_images(
     img_dir = output_dir / "images" / "statuses"
     failed_file = output_dir / "failed_images.json"
 
-    failed = []
-    if failed_file.exists():
-        try:
-            failed = json.loads(failed_file.read_text(encoding="utf-8"))
-        except Exception:
-            failed = []
-    failed_set = {(f["sid"], f["idx"]) for f in failed}
-
     total_images = sum(len(s["images"]) for s in statuses)
     log(f"开始下载图片，共 {total_images} 张...")
 
     downloaded = 0
     skipped = 0
     fail_count = 0
+    failed = []
 
     for status in statuses:
         sid = status["id"]
@@ -452,10 +451,6 @@ def download_images(
                 skipped += 1
                 continue
 
-            if (sid, idx) in failed_set:
-                fail_count += 1
-                continue
-
             ok = client.download_image(img_url, dest)
             if ok:
                 downloaded += 1
@@ -463,16 +458,17 @@ def download_images(
             else:
                 fail_count += 1
                 failed.append({"sid": sid, "idx": idx, "url": img_url})
-                failed_set.add((sid, idx))
                 log(f"  ✗ 图片下载失败: {img_url}")
 
             time.sleep(0.5)
 
-    # 保存失败列表
+    # 保存失败列表（每次重新生成，重跑时会自动重试）
     if failed:
         failed_file.write_text(
             json.dumps(failed, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+    elif failed_file.exists():
+        failed_file.unlink()
 
     log(f"图片下载完成：下载 {downloaded} 张，跳过 {skipped} 张，失败 {fail_count} 张")
 
@@ -494,7 +490,8 @@ def format_status_md(status: dict, img_dir: Path | None = None) -> str:
         lines.append(status["text"])
         lines.append("")
 
-    # 图片
+    # 图片（使用相对于 markdown 文件的路径）
+    img_rel_dir = "../images/statuses"
     for idx, img_url in enumerate(status["images"]):
         ext = "jpg"
         ext_m = re.search(r"\.([a-zA-Z0-9]+)(?:\?|$)", img_url)
@@ -502,12 +499,9 @@ def format_status_md(status: dict, img_dir: Path | None = None) -> str:
             ext = ext_m.group(1).lower()
             if ext not in ("jpg", "jpeg", "png", "gif", "webp"):
                 ext = "jpg"
-        if img_dir:
-            local_path = img_dir / f"{status['id']}_{idx}.{ext}"
-            if local_path.exists():
-                lines.append(f"![图片]({local_path})")
-            else:
-                lines.append(f"![图片]({img_url})")
+        filename = f"{status['id']}_{idx}.{ext}"
+        if img_dir and (img_dir / filename).exists():
+            lines.append(f"![图片]({img_rel_dir}/{filename})")
         else:
             lines.append(f"![图片]({img_url})")
 
@@ -586,7 +580,7 @@ def main():
         cookies = parse_cookie_string(args.cookie)
         log("使用手动指定的 Cookie")
     else:
-        cookies = extract_cookies_from_safari()
+        cookies = extract_cookies_from_browser()
         if not cookies:
             log("❌ 无法获取 Cookie，请使用 --cookie 手动传入")
             log('  示例：--cookie \'dbcl2="123456:xxx";ck=wwpi\'')
