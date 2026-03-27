@@ -338,12 +338,22 @@ def parse_single_status(chunk: str, sid: str, uid: str) -> dict | None:
         if img_url not in images:
             images.append(img_url)
 
+    # ── 归一化日期为 YYYY-MM-DD 格式 ──
+    normalized_time = create_time
+    if create_time and not re.match(r'\d{4}-\d{2}-\d{2}', create_time):
+        # 尝试解析中文日期格式如 "3月19日"
+        cn_m2 = re.match(r'(\d{1,2})月(\d{1,2})日', create_time)
+        if cn_m2:
+            month, day = int(cn_m2.group(1)), int(cn_m2.group(2))
+            year = datetime.now().year
+            normalized_time = f"{year}-{month:02d}-{day:02d}"
+
     # ── 构建广播 URL ──
     url = f"https://www.douban.com/people/{uid}/status/{sid}/"
 
     return {
         "id": sid,
-        "create_time": create_time,
+        "create_time": normalized_time,
         "activity": activity,
         "text": text,
         "images": images,

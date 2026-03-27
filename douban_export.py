@@ -88,22 +88,23 @@ def save_raw(filename: str, data: list):
 # ── Cookie 提取 ──────────────────────────────────────────────────────────────
 
 def extract_cookies_from_browser() -> dict | None:
-    """从 Chrome 自动提取豆瓣 Cookie"""
+    """从浏览器自动提取豆瓣 Cookie（依次尝试 Safari → Chrome）"""
     if not HAS_BROWSER_COOKIE3:
         return None
-    try:
-        log("正在从 Chrome 提取豆瓣 Cookie...")
-        jar = browser_cookie3.chrome(domain_name=".douban.com")
-        cookies = {c.name: c.value for c in jar}
-        required = {"dbcl2", "ck"}
-        if required.issubset(cookies.keys()):
-            log(f"Cookie 提取成功，找到: {', '.join(cookies.keys())}")
-            return cookies
-        log(f"Cookie 不完整，缺少: {required - cookies.keys()}")
-        return None
-    except Exception as e:
-        log(f"自动提取 Cookie 失败: {e}")
-        return None
+    for browser_name, browser_fn in [("Safari", browser_cookie3.safari), ("Chrome", browser_cookie3.chrome)]:
+        try:
+            log(f"正在从 {browser_name} 提取豆瓣 Cookie...")
+            jar = browser_fn(domain_name=".douban.com")
+            cookies = {c.name: c.value for c in jar}
+            if "ck" not in cookies:
+                cookies["ck"] = "wwpi"
+            if "dbcl2" in cookies:
+                log(f"Cookie 提取成功（{browser_name}），找到: {', '.join(cookies.keys())}")
+                return cookies
+            log(f"{browser_name} Cookie 不完整，缺少 dbcl2")
+        except Exception as e:
+            log(f"{browser_name} 提取失败: {e}")
+    return None
 
 
 def parse_cookie_string(cookie_str: str) -> dict:
@@ -453,7 +454,7 @@ def _download_original_images(client: DoubanClient, items: list):
         failed_path.write_text(
             json.dumps(failed, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        log(f"  ⚠ {len(failed)} 张图片下载失败，���记录到 {failed_path}")
+        log(f"  ⚠ {len(failed)} 张图片下载失败，已记录到 {failed_path}")
 
     log(f"  图片下载完成: {downloaded}/{total_images}（跳过已存在 {skipped}）")
 
