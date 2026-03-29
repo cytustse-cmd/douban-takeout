@@ -56,8 +56,8 @@ def load_progress() -> dict:
     if PROGRESS_FILE.exists():
         try:
             return json.loads(PROGRESS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: failed to load progress file: {e}")
     return {}
 
 
@@ -74,8 +74,8 @@ def load_raw(filename: str) -> list:
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: failed to load raw file {filename}: {e}")
     return []
 
 
@@ -442,7 +442,8 @@ def _download_original_images(client: DoubanClient, items: list):
                         time.sleep(30 * attempt)
                     else:
                         break
-                except Exception:
+                except Exception as e:
+                    print(f"Warning: image download failed (sid={sid}, idx={idx}): {e}")
                     time.sleep(5)
 
             if not success:
@@ -889,8 +890,8 @@ def main():
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             total_items += len(data)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: failed to count records in {f.name}: {e}")
     log(f"共导出 {total_items} 条记录，分布在 {len(raw_files)} 个文件")
 
 

@@ -52,8 +52,8 @@ def load_progress(output_dir: Path) -> dict:
     if progress_file.exists():
         try:
             return json.loads(progress_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: failed to load progress file: {e}")
     return {}
 
 
@@ -71,8 +71,8 @@ def load_raw(output_dir: Path, filename: str) -> list:
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: failed to load raw file {filename}: {e}")
     return []
 
 
