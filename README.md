@@ -46,6 +46,9 @@ python3 douban_export.py --no-statuses
 
 # 2. Statuses + images (web scraping bypasses API pagination limits)
 python3 export_statuses_web.py
+
+# 3. Optional: build an Obsidian vault with covers and Chinese filenames
+python3 build_obsidian_vault.py --vault ~/Vault/douban
 ```
 
 > **Requirements:** Python 3.10+, logged into Douban in your browser
@@ -88,6 +91,37 @@ output/
 └── images/
     └── statuses/           # Status images (largest available size)
 ```
+
+## Obsidian Vault (optional)
+
+Turn your raw JSON into an Obsidian-ready knowledge base — categorized folders, Chinese filenames, and inline cover thumbnails:
+
+```bash
+python3 build_obsidian_vault.py --vault ~/Vault/douban
+```
+
+Output:
+
+```
+{vault}/
+├── _索引.md                          # entry page with wikilinks
+├── covers/{movie,book,game,music}/   # downloaded cover images
+├── 电影/   看过.md / 在看.md / 想看.md
+├── 书籍/   读过.md / 在读.md / 想读.md
+├── 游戏/   玩过.md / 在玩.md / 想玩.md
+└── 音乐/   听过.md / 想听.md
+```
+
+Each `.md` is a Markdown table: `cover | date | title | rating | comment`, sorted newest-first. Open Obsidian, point it at the vault, and you get a fully browsable visual library.
+
+Re-sync workflow (run anytime after new ratings):
+
+```bash
+python3 douban_export.py --no-statuses --cookie '...'
+python3 build_obsidian_vault.py --vault ~/Vault/douban   # incremental: skips already-downloaded covers
+```
+
+Flags: `--no-covers` to skip image download · `--workers N` to tune concurrency (default 8) · `--raw output/raw` to point to a custom raw dir.
 
 ## Architecture
 
@@ -150,6 +184,11 @@ The Rexxar API returns structured JSON but hard-limits status pagination (~10 it
 | **Total** | **~5,700 + 728 imgs** | **~22 min** |
 
 ## Changelog
+
+### v0.4.0 (2026-05-06)
+
+- **feat:** Add `build_obsidian_vault.py` — convert raw JSON into Obsidian-ready Markdown vault with categorized folders, Chinese filenames, and inline cover thumbnails
+- **feat:** Concurrent cover downloads (8 workers default), idempotent on rerun
 
 ### v0.3.1 (2026-03-25)
 
@@ -240,6 +279,9 @@ python3 douban_export.py --no-statuses
 
 # 导出广播动态 + 图片（网页抓取，无分页限制）
 python3 export_statuses_web.py
+
+# 可选：构建 Obsidian 图文 vault（中文文件名 + 本地封面缩略图）
+python3 build_obsidian_vault.py --vault ~/Vault/豆瓣资料/标记记录
 ```
 
 <details>
@@ -285,6 +327,37 @@ output/
 └── images/
     └── statuses/           # 广播配图，自动选取最大尺寸
 ```
+
+## Obsidian 图文 vault（可选）
+
+将 raw JSON 转换成 Obsidian 友好的知识库——分类目录、中文文件名、表格首列嵌入本地封面缩略图：
+
+```bash
+python3 build_obsidian_vault.py --vault ~/Vault/豆瓣资料/标记记录
+```
+
+输出结构：
+
+```
+{vault}/
+├── _索引.md                          # 入口页，wikilink 指向各分类
+├── covers/{movie,book,game,music}/   # 已下载的封面图
+├── 电影/   看过.md / 在看.md / 想看.md
+├── 书籍/   读过.md / 在读.md / 想读.md
+├── 游戏/   玩过.md / 在玩.md / 想玩.md
+└── 音乐/   听过.md / 想听.md
+```
+
+每个 `.md` 是 Markdown 表格：`封面 | 时间 | 标题 | 评分 | 短评`，按标记时间倒序。Obsidian 直接打开这个 vault 即可图文浏览。
+
+后续同步工作流（新增标记后随时跑）：
+
+```bash
+python3 douban_export.py --no-statuses --cookie '...'
+python3 build_obsidian_vault.py --vault ~/Vault/豆瓣资料/标记记录   # 增量：已下载封面跳过
+```
+
+可选参数：`--no-covers` 跳过封面下载 · `--workers N` 调整并发数（默认 8）· `--raw output/raw` 指定自定义 raw 目录。
 
 ## 双引擎架构
 
@@ -354,6 +427,11 @@ Rexxar API 返回结构化 JSON，适合处理书影音标记；但其广播接�
 
 <details>
 <summary><b>展开查看</b></summary>
+
+#### v0.4.0 (2026-05-06)
+
+- **feat:** 新增 `build_obsidian_vault.py`，把 raw JSON 转成 Obsidian 图文 vault（分类目录 + 中文文件名 + 本地封面缩略图）
+- **feat:** 封面 8 线程并发下载，重跑时跳过已存在文件
 
 #### v0.3.1 (2026-03-25)
 
