@@ -3,12 +3,14 @@
 build_obsidian_vault.py
 =======================
 
-将 output/raw/ 下的 Rexxar API JSON 转换为 Obsidian 友好的「图文并茂」
-Markdown 视图——分类目录、中文文件名、本地封面缩略图。
+将 output/raw/ 下的 Rexxar API JSON 转换为 Obsidian + Dataview 友好的图文 vault。
 
-依赖：纯标准库（无需 pip 安装额外包）。
-前置：先跑过 `python3 douban_export.py --no-statuses ...`，
-      生成 output/raw/{movie,book,game,music}_{done,doing,wish}.json。
+机制：
+- 每个豆瓣条目 → 一个独立的小 .md 文件（带 frontmatter 元数据）
+- 每个分类×状态 → 一个索引页 .md，内嵌单条 Dataview TABLE 查询
+- Obsidian 中点列头即可在原地切换排序（评分 / 时间 / 标题…），无需另存文件
+
+依赖：纯标准库；前置安装 Obsidian 的 Dataview 插件。
 
 用法：
     python3 build_obsidian_vault.py --vault /path/to/标记记录
@@ -19,7 +21,8 @@ Markdown 视图——分类目录、中文文件名、本地封面缩略图。
     {vault}/
     ├── _索引.md
     ├── covers/{movie,book,game,music}/{id}.jpg
-    ├── 电影/   看过.md 在看.md 想看.md
+    ├── 条目/{movie,book,game,music}/{id}.md   # 数据文件（每条一个）
+    ├── 电影/   看过.md 在看.md 想看.md           # Dataview 查询页
     ├── 书籍/   读过.md 在读.md 想读.md
     ├── 游戏/   玩过.md 在玩.md 想玩.md
     └── 音乐/   听过.md 想听.md
@@ -29,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -48,10 +52,17 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
 
 
-def esc(s) -> str:
+def yaml_str(s) -> str:
+    """把任意字符串转成单行双引号 YAML 字符串。"""
     if s is None:
-        return ""
-    return str(s).replace("\r", " ").replace("\n", " ").replace("|", "\\|").strip()
+        return '""'
+    t = (str(s)
+         .replace("\\", "\\\\")
+         .replace('"', '\\"')
+         .replace("\n", " ")
+         .replace("\r", " ")
+         .strip())
+    return f'"{t}"'
 
 
 def stars(rating) -> str:
@@ -159,7 +170,8 @@ def collect_covers(raw_dir: Path) -> dict[tuple[str, str], str]:
     return mapping
 
 
-def find_cover_relpath(covers_dir: Path, cat: str, sid: str | None) -> str | None:
+def find_cover_filename(covers_dir: Path, cat: str, sid: str | None) -> str | None:
+    """返回 covers/{cat}/ 下匹配 sid 的文件名（不含路径）。"""
     if not sid:
         return None
     d = covers_dir / cat
@@ -168,44 +180,124 @@ def find_cover_relpath(covers_dir: Path, cat: str, sid: str | None) -> str | Non
     for ext in (".jpg", ".jpeg", ".png", ".webp"):
         p = d / f"{sid}{ext}"
         if p.exists() and p.stat().st_size > 0:
-            return f"../covers/{cat}/{p.name}"
+            return p.name
     return None
 
 
-def write_md(vault: Path, covers_dir: Path, cat: str, status: str, items: list[dict]) -> int:
+def write_item_note(vault: Path, cat: str, status: str, item: dict, cover_width: int) -> bool:
+    """生成 {vault}/条目/{cat}/{id}.md，内含 frontmatter 元数据。"""
+    s = item.get("subject") or {}
+    sid = safe_id(item)
+    if not sid:
+        return False
+    items_dir = vault / "条目" / cat / status
+    items_dir.mkdir(parents=True, exist_ok=True)
+
+    title = (s.get("title") or s.get("cn_name") or "").strip()
+    date = (item.get("create_time", "") or "")[:10]
+    rating_obj = item.get("rating") or {}
+    try:
+        rating_val = int((rating_obj or {}).get("value") or 0)
+    except (TypeError, ValueError):
+        rating_val = 0
+    comment = (item.get("comment") or "").strip() or "—"
+    url = s.get("url") or (f"https://www.douban.com/{cat}/{sid}/" if sid else "")
+    title_link_md = f"[{title}]({url})" if url else title
+
+    # 封面：用相对路径，从查询文件位置 {vault}/{cat_zh}/{status_zh}.md 解析
+    fname = find_cover_filename(vault / "covers", cat, sid)
+    if fname:
+        cover_md = f'<img src="../covers/{cat}/{fname}" width="{cover_width}">'
+    else:
+        cover_md = "—"
+
+    rating_stars = stars(rating_val) if rating_val else "—"
+
+    fm_lines = [
+        "---",
+        f"id: {sid}",
+        f"cat: {cat}",
+        f"status: {status}",
+        f"title: {yaml_str(title)}",
+        f"date: {date}",
+        f"rating: {rating_val}",
+        f'rating_stars: {yaml_str(rating_stars)}',
+        f"comment: {yaml_str(comment)}",
+        f"url: {url}",
+        f"title_link: {yaml_str(title_link_md)}",
+        f"cover: {yaml_str(cover_md)}",
+        f"tags: [豆瓣/{cat}/{status}]",
+        "---",
+        "",
+        f"# {title}",
+        "",
+        f"- 时间：{date}",
+        f"- 评分：{rating_stars}",
+        f"- 短评：{comment}",
+        f"- [在豆瓣打开]({url})" if url else "",
+        "",
+    ]
+    (items_dir / f"{sid}.md").write_text("\n".join(fm_lines), encoding="utf-8")
+    return True
+
+
+def _esc_cell(s) -> str:
+    if s is None:
+        return ""
+    return str(s).replace("\r", " ").replace("\n", " ").replace("|", "\\|").strip()
+
+
+def write_query_page(vault: Path, cat: str, status: str, items: list[dict],
+                     cover_width: int) -> None:
+    """生成 {vault}/{cat_zh}/{status_zh}.md，写入普通 Markdown 表格（Sortable 插件可点列头排序）。"""
     cat_zh = CATEGORY[cat]
     status_zh = ZH_STATUS[cat][status]
     sub = vault / cat_zh
     sub.mkdir(exist_ok=True)
-    items.sort(key=lambda r: r.get("create_time", "") or "", reverse=True)
 
+    rows = sorted(items, key=lambda r: r.get("create_time", "") or "", reverse=True)
     lines = [
         f"# {cat_zh} · {status_zh}",
         "",
-        f"共 **{len(items)}** 条 · 按标记时间倒序",
+        f"共 **{len(rows)}** 条 · **Reading View 下点列头切换排序**（需启用 Sortable 插件）",
         "",
-        "| 封面 | 时间 | 标题 | 评分 | 短评 |",
-        "|---|---|---|---|---|",
+        "| 封面 | 时间 | 标题 | 评分 | 分 | 短评 |",
+        "|---|---|---|---:|---:|---|",
     ]
-    for it in items:
+    for it in rows:
         s = it.get("subject") or {}
         sid = safe_id(it)
         date = (it.get("create_time", "") or "")[:10]
-        title = esc(s.get("title") or s.get("cn_name") or "")
+        title = _esc_cell(s.get("title") or s.get("cn_name") or "")
         url = s.get("url") or (f"https://www.douban.com/{cat}/{sid}/" if sid else "")
         title_link = f"[{title}]({url})" if url else title
-        rating = it.get("rating") or {}
-        rt = stars(rating.get("value")) if isinstance(rating, dict) else "—"
-        comment = esc(it.get("comment", "")) or "—"
-        rel = find_cover_relpath(covers_dir, cat, sid)
-        cover_md = f'<img src="{rel}" width="60">' if rel else "—"
-        lines.append(f"| {cover_md} | {date} | {title_link} | {rt} | {comment} |")
+        rating_obj = it.get("rating") or {}
+        try:
+            rv = int((rating_obj or {}).get("value") or 0)
+        except (TypeError, ValueError):
+            rv = 0
+        rt = stars(rv) if rv else "—"
+        comment = _esc_cell(it.get("comment", "")) or "—"
+        fname = find_cover_filename(vault / "covers", cat, sid)
+        cover_md = (f'<img src="../covers/{cat}/{fname}" width="{cover_width}">'
+                    if fname else "—")
+        lines.append(
+            f"| {cover_md} | {date} | {title_link} | {rt} | {rv if rv else ''} | {comment} |"
+        )
     (sub / f"{status_zh}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return len(items)
+    # 清理上一版可能遗留的 _按评分.md
+    legacy = sub / f"{status_zh}_按评分.md"
+    if legacy.exists():
+        legacy.unlink()
 
 
 def write_index(vault: Path, stats: dict[tuple[str, str], int]) -> None:
-    lines = ["# 豆瓣标记记录", "", "> 由 douban-takeout 自动生成 · 图文并茂版", ""]
+    lines = [
+        "# 豆瓣标记记录",
+        "",
+        "> 由 douban-takeout 自动生成 · Dataview 视图 · 点列头切换排序",
+        "",
+    ]
     for cat in CAT_ORDER:
         if not any((cat, s) in stats for s in STATUS_ORDER):
             continue
@@ -221,11 +313,13 @@ def write_index(vault: Path, stats: dict[tuple[str, str], int]) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="将豆瓣 raw JSON 转为 Obsidian 图文 Markdown vault")
+    p = argparse.ArgumentParser(description="将豆瓣 raw JSON 转为 Obsidian + Dataview 图文 vault")
     p.add_argument("--raw", default="output/raw", help="raw JSON 目录（默认 output/raw）")
     p.add_argument("--vault", required=True, help="输出 vault 目录（如 ~/Vault/豆瓣资料/标记记录）")
     p.add_argument("--workers", type=int, default=8, help="封面下载并发数（默认 8）")
     p.add_argument("--no-covers", action="store_true", help="跳过封面下载，只生成 Markdown")
+    p.add_argument("--cover-width", type=int, default=120,
+                   help="封面缩略图宽度 px（默认 120）")
     args = p.parse_args()
 
     raw_dir = Path(args.raw).expanduser().resolve()
@@ -247,16 +341,22 @@ def main() -> None:
         ok, fail = CoverDownloader(covers_dir, workers=args.workers).run(mapping)
         print(f"  下载完成: 成功 {ok} 失败 {fail}")
 
-    print("[2/2] 生成 Markdown")
+    # 清理之前 Dataview 方案遗留的 条目/ 目录
+    items_root = vault / "条目"
+    if items_root.exists():
+        shutil.rmtree(items_root)
+        print("  已清理旧 条目/ 目录（Dataview 方案遗留）")
+
+    print("[2/2] 生成 Markdown 表格")
     stats: dict[tuple[str, str], int] = {}
     for cat in CAT_ORDER:
         for status in STATUS_ORDER:
             items = load_raw(raw_dir, cat, status)
             if not items:
                 continue
-            n = write_md(vault, covers_dir, cat, status, items)
-            stats[(cat, status)] = n
-            print(f"  {CATEGORY[cat]}/{ZH_STATUS[cat][status]}.md  ({n} 条)")
+            write_query_page(vault, cat, status, items, args.cover_width)
+            stats[(cat, status)] = len(items)
+            print(f"  {CATEGORY[cat]}/{ZH_STATUS[cat][status]}.md  ({len(items)} 条)")
     write_index(vault, stats)
     print(f"完成: {vault / '_索引.md'}")
 
